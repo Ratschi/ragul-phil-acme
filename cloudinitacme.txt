@@ -1,0 +1,77 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - nginx
+  - curl
+  - dnsutils
+
+runcmd:
+  - curl https://get.acme.sh | sh
+
+write_files:
+  - path: /home/ubuntu/acme_nginx_setup.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+
+      # Setze die Variablen
+      DOMAIN="Domain setzen"
+      DNS_SERVER="NS Server setzen"
+      NSUPDATE_KEY="pfad nsupdatekey setzen"
+      ACME="$HOME/.acme.sh/acme.sh"
+      NGINX_CONF="/etc/nginx/sites-enabled/$DOMAIN.conf"
+
+      # Erzeuge ein neues Zertifikat mit acme.sh und fange den TXT-Eintrag ab
+      $ACME --issue --dns --yes-I-know-dns-manual-mode-enough-go-ahead-please -d $DOMAIN
+
+      # Installiere das Zertifikat
+      $ACME --install-cert -d $DOMAIN \
+      --key-file /home/ubuntu/$DOMAIN.key \
+      --fullchain-file /home/ubuntu/$DOMAIN.cer
+
+      # Benutzer zur Eingabe der benötigten Informationen auffordern
+      read -p "Geben Sie den Domainnamen ein: " TXT_RECORD
+      read -p "Geben Sie den TXT-Eintrag ein: " TXT_VALUE
+
+      # Temporäre nsupdate-Datei erstellen
+      NSUPDATE_FILE=$(mktemp)
+
+      # Füge nsupdate-Befehle hinzu, um den TXT-Eintrag zu erstellen
+      cat <<EOF > $NSUPDATE_FILE
+      server $DNS_SERVER
+      update add $TXT_RECORD 300 IN TXT "$TXT_VALUE"
+      send
+      EOF
+
+      # Führe nsupdate aus
+      nsupdate -k $NSUPDATE_KEY $NSUPDATE_FILE
+
+      # Temporäre Datei löschen
+      rm $NSUPDATE_FILE
+
+      # Erstelle die Nginx-Konfigurationsdatei
+      cat <<EOF > $NGINX_CONF
+      server {
+        listen 443 ssl;
+        server_name $DOMAIN;
+
+        ssl_certificate /home/ubuntu/$DOMAIN.cer;
+        ssl_certificate_key /home/ubuntu/$DOMAIN.key;
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+
+        # Root-Verzeichnis und andere Einstellungen
+        root /var/www/html;
+        index index.html index.htm index.nginx-debian.html;
+      }
+      EOF
+
+      # Nginx-Konfiguration neu laden
+      sudo systemctl restart nginx
+
+runcmd:
+  - chmod +x /home/ubuntu/acme_nginx_setup.sh
+
+final_message: "The system is finally up, after cloud-init executed."
